@@ -54,6 +54,7 @@ jobs:
           cp build-win/torneko.exe dist/
           cp "$SDL2_DIR/bin/SDL2.dll" dist/
           cp LICENSE THIRD_PARTY_NOTICES.md dist/
+          printf '@echo off\r\n"%%~dp0torneko.exe" --export "%%~dp0disc image"\r\n' > "dist/Export disc image.bat"
           cat > dist/README.txt <<'TXT'
           Torneko - native Windows port (static recompilation)
 
@@ -71,6 +72,9 @@ jobs:
           Keyboard keys and Controller buttons for rebinding. Hold Tab to fast-forward.
           Saves go to memcard1.mcd next to the exe (a standard PS1 memory card image,
           usable in emulators). Settings are in torneko.ini.
+
+          Need the disc image back? Run "Export disc image.bat": it writes the .cue and
+          .bin files, byte-identical to the original, into a "disc image" folder.
           TXT
           sed -i 's/^          //' dist/README.txt
           ls -la dist
@@ -133,6 +137,9 @@ jobs:
           Keyboard keys and Controller buttons for rebinding. Hold Tab to fast-forward.
           Saves go to memcard1.mcd next to the program (a standard PS1 memory card
           image, usable in emulators). Settings are in torneko.ini.
+
+          Need the disc image back? Run ./torneko --export : it writes the .cue and
+          .bin files, byte-identical to the original, into a "disc image" folder.
           TXT
           sed -i 's/^          //' dist/torneko/README.txt
           tar czf dist/torneko-linux-x86_64.tar.gz -C dist torneko

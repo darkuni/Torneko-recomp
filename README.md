@@ -31,6 +31,9 @@ Steam as a non-Steam game).
 3. The disc is imported once into **`assets.dat`** (about 400 MB) and checked sector by sector
    to be an exact copy. From then on the game runs from `assets.dat` and the disc image can be
    deleted.
+4. Need the disc image back? `Export disc image.bat` (Windows) or `./torneko --export [folder]`
+   writes the `.cue` and `.bin` files out of `assets.dat`, byte-identical to the imported image
+   (checked: the same SHA-1 for both tracks).
 
 ### In-game settings (F1 or Esc, Start+Select on a controller)
 

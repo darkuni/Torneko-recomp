@@ -5,6 +5,7 @@
 #define GAME_BIN "torneko.exe"
 #define GAME_EXE_NAME "SLUS_011.81"
 #define GAME_SERIAL "SLUS-01181"
+#define GAME_DISC_NAME "World of Dragon Warrior - Torneko - The Last Hope (USA)"   // --export file names
 #define VSYNC_WAIT_FN 0x80097074u       // libetc VSync wait loop (replaced: see hle_vsync_wait)
 static const unsigned GAME_EXE_SIZE = 1122304u;
 static const unsigned GAME_EXE_PC = 0x8001e404u;

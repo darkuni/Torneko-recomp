@@ -6,6 +6,7 @@
 #include "gte.h"
 #include "log.h"
 #include "rumble.h"
+#include "discpack.h"
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -216,13 +217,25 @@ static std::string check_exe(std::vector<uint8_t>& exe) {
 #if defined(_WIN32) || defined(USE_SDL)
 static SDL_Window* g_imp_win = nullptr;
 static SDL_Renderer* g_imp_ren = nullptr;
+static const char* g_prog_label = "Importing disc into assets.dat";
+static void progress_open(const char* title) {
+    SDL_Init(SDL_INIT_VIDEO);
+    g_imp_win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 480, 108, 0);
+    if (g_imp_win) g_imp_ren = SDL_CreateRenderer(g_imp_win, -1, 0);
+}
+static void progress_close() {
+    if (g_imp_ren) SDL_DestroyRenderer(g_imp_ren);
+    if (g_imp_win) SDL_DestroyWindow(g_imp_win);
+    g_imp_ren = nullptr;
+    g_imp_win = nullptr;
+}
 static void import_progress(int done, int total) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {}
     int pct = total ? done * 100 / total : 0;
     char t[96];
-    snprintf(t, sizeof t, "Importing disc into assets.dat - %d%%", pct);
-    SDL_SetWindowTitle(g_imp_win, t);
+    snprintf(t, sizeof t, "%s - %d%%", g_prog_label, pct);
+    if (g_imp_win) SDL_SetWindowTitle(g_imp_win, t);
     if (g_imp_ren) {
         SDL_SetRenderDrawColor(g_imp_ren, 24, 18, 32, 255);
         SDL_RenderClear(g_imp_ren);
@@ -233,10 +246,13 @@ static void import_progress(int done, int total) {
         SDL_RenderFillRect(g_imp_ren, &bar);
         SDL_RenderPresent(g_imp_ren);
     }
-    fprintf(stderr, "\r[import] %d%%", pct);
+    fprintf(stderr, "\r%s - %d%%", g_prog_label, pct);
 }
 #else
-static void import_progress(int done, int total) { fprintf(stderr, "\r[import] %d%%", total ? done * 100 / total : 0); }
+static const char* g_prog_label = "Importing disc into assets.dat";
+static void progress_open(const char*) {}
+static void progress_close() {}
+static void import_progress(int done, int total) { fprintf(stderr, "\r%s - %d%%", g_prog_label, total ? done * 100 / total : 0); }
 #endif
 
 static void info(const std::string& msg) {
@@ -252,20 +268,11 @@ static void import_disc(const std::string& disc, const fs::path& pack) {
     std::vector<uint8_t> exe;
     std::string bad = check_exe(exe);
     if (!bad.empty()) fatal(bad);
-#if defined(_WIN32) || defined(USE_SDL)
-    SDL_Init(SDL_INIT_VIDEO);
-    g_imp_win = SDL_CreateWindow("Importing disc", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 480, 108, 0);
-    if (g_imp_win) g_imp_ren = SDL_CreateRenderer(g_imp_win, -1, 0);
-#endif
+    progress_open("Importing disc");
     std::string err;
     bool ok = cd_make_pack(pack.string().c_str(), import_progress, &err);
     fprintf(stderr, "\n");
-#if defined(_WIN32) || defined(USE_SDL)
-    if (g_imp_ren) SDL_DestroyRenderer(g_imp_ren);
-    if (g_imp_win) SDL_DestroyWindow(g_imp_win);
-    g_imp_ren = nullptr;
-    g_imp_win = nullptr;
-#endif
+    progress_close();
     cd_close_image();
     if (!ok) fatal("Importing the disc failed: " + err);
     std::error_code ec;
@@ -275,6 +282,53 @@ static void import_disc(const std::string& disc, const fs::path& pack) {
     info("Your disc was imported into assets.dat (" + std::string(buf) + ", verified lossless).\n\n"
          "The game now runs from assets.dat alone. The disc image (" + fs::path(disc).filename().string() +
          " and any .bin files) is no longer needed and can be deleted.");
+}
+
+
+// assets.dat -> .cue + .bin (one .bin per track), byte-identical to the imported disc image
+static void export_disc(const fs::path& pack, const fs::path& dir) {
+    DiscLayout lay;
+    std::string err;
+    if (!pack_open(pack.string(), &lay, &err)) fatal("Cannot open " + pack.string() + ": " + err);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const std::string name = GAME_DISC_NAME;
+    const bool two = lay.t2_sectors > 0;
+    struct Part { std::string file; int first, count; };
+    std::vector<Part> parts;
+    parts.push_back({name + (two ? " (Track 1).bin" : ".bin"), 0, lay.t1_sectors});
+    if (two) parts.push_back({name + " (Track 2).bin", lay.t1_sectors, lay.t2_start + lay.t2_sectors - lay.t1_sectors});
+    const int total = lay.t2_start + lay.t2_sectors;
+    int done = 0;
+    g_prog_label = "Writing the disc image";
+    progress_open("Writing the disc image");
+    uint8_t sec[2352];
+    for (auto& p : parts) {
+        FILE* f = fopen((dir / p.file).string().c_str(), "wb");
+        if (!f) { progress_close(); fatal("Cannot create " + (dir / p.file).string()); }
+        for (int i = 0; i < p.count; i++) {
+            if (!pack_read(p.first + i, sec)) { fclose(f); progress_close(); fatal("assets.dat is damaged (sector " + std::to_string(p.first + i) + ")"); }
+            if (fwrite(sec, 1, 2352, f) != 2352) { fclose(f); progress_close(); fatal("Write error (disk full?) in " + p.file); }
+            if (++done % 4096 == 0) import_progress(done, total);
+        }
+        fclose(f);
+    }
+    import_progress(total, total);
+    progress_close();
+    std::string cue = "FILE \"" + parts[0].file + "\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n";
+    if (two) {
+        int gap = lay.t2_start - lay.t1_sectors;
+        char idx[32];
+        snprintf(idx, sizeof idx, "%02d:%02d:%02d", gap / 4500, gap / 75 % 60, gap % 75);
+        cue += "FILE \"" + parts[1].file + "\" BINARY\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 " + idx + "\n";
+    }
+    FILE* f = fopen((dir / (name + ".cue")).string().c_str(), "wb");
+    if (!f) fatal("Cannot create the .cue file");
+    fwrite(cue.data(), 1, cue.size(), f);
+    fclose(f);
+    fprintf(stderr, "\n");
+    info("Disc image written to " + dir.string() + ":\n" + name + ".cue + " + std::to_string(parts.size()) +
+         " .bin file(s), " + std::to_string(total) + " sectors.");
 }
 
 int main(int argc, char** argv) {
@@ -296,6 +350,12 @@ int main(int argc, char** argv) {
         fs::path p = argv[2];
         std::string disc = fs::is_directory(p) ? find_disc_in(p) : p.string();
         import_disc(disc, argc > 3 ? fs::path(argv[3]) : pack);
+        return 0;
+    }
+
+    // torneko --export [folder] : write the disc back out of assets.dat as .cue/.bin and exit
+    if (argc > 1 && !strcmp(argv[1], "--export")) {
+        export_disc(pack, argc > 2 ? fs::path(argv[2]) : base / "disc image");
         return 0;
     }
 
