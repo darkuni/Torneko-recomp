@@ -1,0 +1,173 @@
+name: Build Windows and Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release with this tag (e.g. v0.1); empty = just build'
+        required: false
+        default: ''
+
+env:
+  SDL2_VERSION: 2.30.9
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mingw-w64 and Ninja
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mingw-w64 ninja-build cmake
+          x86_64-w64-mingw32-g++-posix --version | head -1
+
+      - name: SDL2 development package (mingw)
+        run: |
+          curl -sSL -o sdl.tar.gz https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-devel-${SDL2_VERSION}-mingw.tar.gz
+          tar xzf sdl.tar.gz
+          echo "SDL2_DIR=$PWD/SDL2-${SDL2_VERSION}/x86_64-w64-mingw32" >> $GITHUB_ENV
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: torneko-win64
+
+      - name: Configure
+        run: |
+          cmake -S src -B build-win -G Ninja -DCMAKE_TOOLCHAIN_FILE=$PWD/src/mingw.cmake \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DSDL2_DIR="$SDL2_DIR"
+
+      - name: Build
+        run: ninja -C build-win -j4
+
+      - name: Stage package
+        run: |
+          mkdir -p dist/game
+          cp build-win/torneko.exe dist/
+          cp "$SDL2_DIR/bin/SDL2.dll" dist/
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/
+          cat > dist/README.txt <<'TXT'
+          Torneko - native Windows port (static recompilation)
+
+          The game is NOT included. First run only: put your own disc image (a .chd,
+          or the .cue file and its .bin; North American release SLUS-01181) next to
+          torneko.exe or in the "game" folder, then run torneko.exe.
+          (Or drag the disc image onto torneko.exe.)
+
+          The disc is imported once into assets.dat and verified to be an exact copy.
+          After that the game runs from assets.dat alone - delete the disc image.
+          The install is then just:
+            torneko.exe, SDL2.dll, assets.dat (+ memcard1.mcd, torneko.ini)
+
+          F1 or Esc (Start+Select on a controller) opens the settings menu, including
+          Keyboard keys and Controller buttons for rebinding. Hold Tab to fast-forward.
+          Saves go to memcard1.mcd next to the exe (a standard PS1 memory card image,
+          usable in emulators). Settings are in torneko.ini.
+          TXT
+          sed -i 's/^          //' dist/README.txt
+          ls -la dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: torneko-win64
+          path: dist/
+
+  linux:
+    # Linux / SteamOS (Steam Deck) build: needs only SDL2 and libGL from the system
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SDL2, GL and Ninja
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsdl2-dev libgl-dev ninja-build cmake
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: torneko-linux
+
+      - name: Configure
+        run: |
+          cmake -S src -B build-linux -G Ninja -DUSE_SDL=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: ninja -C build-linux -j4
+
+      - name: Stage package
+        run: |
+          mkdir -p dist/torneko/game
+          cp build-linux/torneko dist/torneko/
+          strip dist/torneko/torneko
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/torneko/
+          cat > dist/torneko/README.txt <<'TXT'
+          Torneko - native Linux / SteamOS port (static recompilation)
+
+          The game is NOT included. First run only: put your own disc image (a .chd,
+          or the .cue file and its .bin; North American release SLUS-01181) next to
+          the torneko program or in the "game" folder, then run ./torneko
+          (or ./torneko /path/to/image.cue).
+
+          The disc is imported once into assets.dat and verified to be an exact copy.
+          After that the game runs from assets.dat alone - delete the disc image.
+
+          Steam Deck: in Desktop Mode, copy this folder somewhere (e.g. ~/Games/torneko),
+          do the first run from Desktop Mode, then add "torneko" to Steam with
+          "Add a Non-Steam Game" to play it in Game Mode. It needs only SDL2 and
+          OpenGL, which SteamOS has.
+
+          F1 or Esc (Start+Select on a controller) opens the settings menu, including
+          Keyboard keys and Controller buttons for rebinding. Hold Tab to fast-forward.
+          Saves go to memcard1.mcd next to the program (a standard PS1 memory card
+          image, usable in emulators). Settings are in torneko.ini.
+          TXT
+          sed -i 's/^          //' dist/torneko/README.txt
+          tar czf dist/torneko-linux-x86_64.tar.gz -C dist torneko
+          ls -la dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: torneko-linux-x86_64
+          path: dist/torneko-linux-x86_64.tar.gz
+
+  release:
+    # a pushed version tag (v*), or a manual run with release_tag set, publishes a GitHub release with both packages attached
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+    needs: [build, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: pkg
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.release_tag }}"
+          [ -n "$TAG" ] || TAG="${GITHUB_REF_NAME}"
+          (cd pkg/torneko-win64 && zip -r -9 "../../Torneko-${TAG}-win64.zip" .)
+          cp pkg/torneko-linux-x86_64/torneko-linux-x86_64.tar.gz "torneko-${TAG}-linux-x86_64.tar.gz"
+          sed "s/@TAG@/${TAG}/g" .github/release-notes.md > notes.md
+          gh release create "$TAG" --target "${GITHUB_SHA}" --title "Torneko ${TAG}" --notes-file notes.md \
+            "Torneko-${TAG}-win64.zip" "torneko-${TAG}-linux-x86_64.tar.gz"

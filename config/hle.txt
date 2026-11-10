@@ -1,0 +1,11 @@
+# Guest functions replaced by host code (image address host_function)
+# libapi/libcard patch the BIOS pad and memory card drivers in kernel RAM; the HLE BIOS has
+# nothing to patch, and EnablePAD/DisablePAD jump into that patched BIOS code.
+SLUS_011.81 800a2a04 hle_nop    # _patch_pad
+SLUS_011.81 800a29dc hle_nop    # EnablePAD
+SLUS_011.81 800a29f0 hle_nop    # DisablePAD
+SLUS_011.81 800a2bf8 hle_nop    # _patch_card
+SLUS_011.81 800a2c8c hle_nop    # _patch_card2
+SLUS_011.81 800a2cfc hle_nop    # _copy_memcard_patch (C0 table patch)
+# libetc VSync's polling wait: timed at the console's speed (it times out early when recompiled)
+SLUS_011.81 80097074 hle_vsync_wait

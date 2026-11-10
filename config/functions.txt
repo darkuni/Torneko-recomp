@@ -1,0 +1,15 @@
+# Extra function entry points / names for the recompiler.
+#   func <image> <address> [name]
+#   notfunc <image> <address>
+#   interp <image> <address>
+#   table <image> <jr address> <table address> <count>
+# reached through pointers (BIOS callback / function table)
+func SLUS_011.81 80097308
+# 8013c0f0 is a function in MV.PRG but data in LD.PRG (jump table) and BN.PRG (strings)
+notfunc overlays/LD.bin 8013c0f0
+notfunc overlays/BN.bin 8013c0f0
+# switch whose table base is loaded before the loop
+table SLUS_011.81 80024b68 800114cc 6
+table SLUS_011.81 80024aac 800114b4 6
+table SLUS_011.81 80077378 8001cb0c 13
+table overlays/MK.bin 8013242c 801286a8 34
